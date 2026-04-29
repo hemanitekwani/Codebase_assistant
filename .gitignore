@@ -1,0 +1,17 @@
+# Virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Vector DB storage
+chroma_db/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
