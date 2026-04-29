@@ -15,3 +15,10 @@ chroma_db/
 # OS
 .DS_Store
 Thumbs.db
+
+
+data/
+falcon-7b-instruct/
+uvicorn
+0.46.1
+
