@@ -6,12 +6,10 @@ import re
 
 
 
-def parse_python_file(file_path:str):
+def parse_python_file(source_code:str , file_name:str):
     try:
-        with open(file_path , "r" , encoding = "utf-8" , errors = "ignore") as f:
-            source = f.read()
 
-        tree = ast.parse(source)
+        tree = ast.parse(source_code)
 
         imports = []
         functions = []
@@ -24,12 +22,12 @@ def parse_python_file(file_path:str):
                     imports.append(alias.name.split(".")[0])
 
             
-            elif isinstance(node , ast.ImportFrom):
+            elif isinstance(node , ast.ImportFrom) and node.module:
                 if node.module:
                     imports.append(node.module.split(".")[0])
 
 
-            elif isinstance(node , ast.FunctionDef):
+            elif isinstance(node , ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
                 functions.append(node.name)
 
             elif isinstance(node , ast.AsyncFunctionDef):
@@ -50,8 +48,7 @@ def parse_python_file(file_path:str):
 
 
         return {
-            "file": Path(file_path).name,
-            "path":str(file_path),
+            "file": file_name,
             "imports": list(set(imports)),
             "functions":list(set(functions)),
             "classes": list(set(classes)),
@@ -60,14 +57,12 @@ def parse_python_file(file_path:str):
         }
     
     except Exception as e:
-        print(f"Could not parse {file_path}: as {e}")
+        print(f"Could not parse {file_name}: as {e}")
         return None
     
 
-def parse_java_file(file_path: str) -> Optional[dict]:
+def parse_java_file(source_code ,file_name: str) -> Optional[dict]:
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            source = f.read()
 
         imports = []
         functions = []
@@ -75,22 +70,22 @@ def parse_java_file(file_path: str) -> Optional[dict]:
         calls = []
 
         # import com.example.X
-        for match in re.finditer(r"import\s+([\w.]+);", source):
+        for match in re.finditer(r"import\s+([\w.]+);", source_code):
             parts = match.group(1).split(".")
             imports.append(parts[-1])   # just class name
 
         # class X
-        for match in re.finditer(r"class\s+(\w+)", source):
+        for match in re.finditer(r"class\s+(\w+)", source_code):
             classes.append(match.group(1))
 
         # public/private void/String X()
         for match in re.finditer(
-            r"(?:public|private|protected|static)\s+\w+\s+(\w+)\s*\(", source
+            r"(?:public|private|protected|static)\s+\w+\s+(\w+)\s*\(", source_code
         ):
             functions.append(match.group(1))
 
         # method calls: X(
-        for match in re.finditer(r"(\w+)\s*\(", source):
+        for match in re.finditer(r"(\w+)\s*\(", source_code):
             calls.append(match.group(1))
 
         return {
@@ -101,35 +96,32 @@ def parse_java_file(file_path: str) -> Optional[dict]:
             "language": "java"
         }
     except Exception as e:
-        print(f"⚠️ Java parse failed {file_path}: {e}")
+        print(f"Java parse failed {file_name}: {e}")
         return None
 
 
-def parse_go_file(file_path: str) -> Optional[dict]:
+def parse_go_file(source_code:str , file_name:str) -> Optional[dict]:
     try:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            source = f.read()
-
         imports = []
         functions = []
         classes = []
         calls = []
 
         # import "X" or import ( "X" )
-        for match in re.finditer(r'"([\w./]+)"', source):
+        for match in re.finditer(r'"([\w./]+)"', source_code):
             imp = match.group(1)
             imports.append(imp.split("/")[-1])   # last part only
 
         # func X(
-        for match in re.finditer(r"func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(", source):
+        for match in re.finditer(r"func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(", source_code):
             functions.append(match.group(1))
 
         # type X struct
-        for match in re.finditer(r"type\s+(\w+)\s+struct", source):
+        for match in re.finditer(r"type\s+(\w+)\s+struct", source_code):
             classes.append(match.group(1))
 
         # X( calls
-        for match in re.finditer(r"(\w+)\s*\(", source):
+        for match in re.finditer(r"(\w+)\s*\(", source_code):
             calls.append(match.group(1))
 
         return {
@@ -140,7 +132,7 @@ def parse_go_file(file_path: str) -> Optional[dict]:
             "language": "go"
         }
     except Exception as e:
-        print(f"⚠️ Go parse failed {file_path}: {e}")
+        print(f"Go parse failed {file_name}: {e}")
         return None
     
 
@@ -172,29 +164,32 @@ class GraphBuilder:
         self.file_to_index = {}
 
 
-    def build(self, repo_path):
-        repo_path = Path(repo_path)
-
-
-        all_files = []
-
-        for suffix in PARSERS.keys():
-            all_files.extend(repo_path.rglob(f"*{suffix}"))
-
-
+    def build(self, raw_documents):
+        
         file_data = {}
 
-        for file_path in all_files:
-            parsed = parse_file(str(file_path))
+
+        for doc in raw_documents:
+            source_code = doc["page_content"]
+            relative_path = doc["metadata"]["source"] 
+            file_name = Path(doc["metadata"]["source"]).name
+            suffix = Path(file_name).suffix.lower()
+
+            parser = PARSERS.get(suffix)
+
+            if not parser:
+                continue
+
+
+            parsed = parser(source_code , file_name)
 
             if not parsed:
                 continue
 
-            file_name = parsed["file"]
 
             idx = self.graph.add_node({
                 "file": file_name,
-                "path": parsed["path"],
+                "path":relative_path,
                 "functions": parsed["functions"],
                 "classes": parsed["classes"],
                 "calls": parsed["calls"],

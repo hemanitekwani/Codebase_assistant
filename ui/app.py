@@ -1,10 +1,8 @@
 import streamlit as st
 import requests
 import uuid
-import os
+import json
 from streamlit_cookies_manager import EncryptedCookieManager
-
-
 
 API_BASE = "http://localhost:8000"
 
@@ -24,8 +22,11 @@ html, body, [class*="css"] {
     font-family: 'Syne', sans-serif;
 }
  
-/* Hide default streamlit elements */
-#MainMenu, footer, header { visibility: hidden; }
+
+/* Hide default streamlit elements but keep the sidebar toggle! */
+#MainMenu, footer { visibility: hidden; }
+            
+header { background-color: transparent !important; }
 .block-container { padding-top: 1.5rem; padding-bottom: 0; }
  
 /* Background */
@@ -200,23 +201,8 @@ hr { border-color: #1e1e2e; }
     line-height: 1.8;
     color: #374151;
 }
- 
-/* Scrollable chat */
-.chat-container {
-    height: calc(100vh - 200px);
-    overflow-y: auto;
-    padding-right: 0.5rem;
-}
- 
-/* Success / error */
-.stSuccess, .stError, .stInfo, .stWarning {
-    border-radius: 8px !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 0.82rem !important;
-}
 </style>
 """, unsafe_allow_html=True)
-  
 
 cookies = EncryptedCookieManager(
     prefix="codebase_app",
@@ -230,43 +216,34 @@ if "user_id" not in cookies:
     cookies["user_id"] = str(uuid.uuid4())
     cookies.save()
 
-
 st.session_state.user_id = cookies["user_id"]
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = None
 
-
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
 
 if "repo_url" not in st.session_state:
     st.session_state.repo_url = ""
 
-
 if "ingested" not in st.session_state:
     st.session_state.ingested = False
-
 
 if "session_started" not in st.session_state:
     st.session_state.session_started = False
 
-
-def api_ingest(repo_url):
+def api_ingest(repo_url, session_id):
     try:
         r = requests.post(
-        f"{API_BASE}/ingest",
-        json = {"repo_url": repo_url},
-        headers = {"x-user-id": st.session_state.user_id},
-        timeout = 300
+            f"{API_BASE}/ingest",
+            json = {"repo_url": repo_url, "session_id": session_id},
+            headers = {"x-user-id": st.session_state.user_id},
+            timeout = 300
         )
-
         return r.json()
-    
     except Exception as e:
         return {"error": str(e)}
-    
 
 def api_start_session(repo_url):
     try:
@@ -276,54 +253,27 @@ def api_start_session(repo_url):
            headers = {"x-user-id": st.session_state.user_id},
            timeout = 30
         )
-
         return r.json()
-    
     except Exception as e:
         return {"error":str(e)}
-    
-
-def api_chat(session_id:str , query:str):
-    try:
-        r = requests.post(
-            f"{API_BASE}/chat",
-            json = {"session_id":session_id , "query":query},
-            headers = {"x-user-id": st.session_state.user_id},
-            timeout = 120
-        )
-
-        return r.json()
-    
-    except Exception as e:
-        return {"error": str(e)}
-    
-
 
 def format_steps(steps):
     if not steps:
         return ""
     
     badges = ""
-
     for i, step in enumerate(steps):
         badges += f'<span class="step-badge">{step}</span>'
-
         if i < len(steps) - 1:
             badges += '<span class="step-arrow">→</span>'
-
     
     return f'<div class="steps-container">{badges}</div>'
 
-
-##Sidebar
-
+# --- SIDEBAR ---
 with st.sidebar:
     st.markdown('<p class="main-title">⌗ Codebase</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">ASSISTANT v1.0</p>', unsafe_allow_html=True)
- 
+    st.markdown('<p class="sub-title">ASSISTANT v2.0</p>', unsafe_allow_html=True)
     st.markdown("---")
-
-    ## session_status
 
     st.markdown('<p class="section-label">Session</p>', unsafe_allow_html=True)
 
@@ -338,16 +288,13 @@ with st.sidebar:
             f'{st.session_state.session_id[:16]}...</p>',
             unsafe_allow_html=True
         )
-
     else:
         st.markdown(
             '<span class="status-pill status-inactive">● No Session</span>',
             unsafe_allow_html=True
         )
 
-
     st.markdown("---")
-
     st.markdown('<p class="section-label">Repository</p>', unsafe_allow_html=True)
  
     repo_url = st.text_input(
@@ -357,39 +304,15 @@ with st.sidebar:
     )
 
     col1 , col2 = st.columns(2)
-
     with col1:
-        ingest_btn = st.button("⬇ Ingest", use_container_width=True)
-
-    with col2:
         start_btn = st.button("▶ Start", use_container_width=True)
-
-
-    if ingest_btn and repo_url:
-        with st.spinner("Ingesting repo..."):
-            result = api_ingest(repo_url)
-
-            if "error" in result:
-                st.error(f"Failed: {result['error']}")
-
-            elif result.get("status") == "already_ingested":
-                st.info(f"Already ingested ({result.get('chunks')} chunks)")
-                st.session_state.ingested = True
-                st.session_state.repo_url = repo_url
-
-
-            else:
-                st.success(f"{result.get('chunks' , 0)} chunks indexed")
-                st.session_state.ingested = True
-                st.session_state.repo_url = repo_url
-
+    with col2:
+        ingest_btn = st.button("⬇ Ingest", use_container_width=True)
 
     if start_btn and repo_url:
         with st.spinner("Starting session..."):
             result = api_start_session(repo_url)
-
             session_id = result.get("session_id")
-            print(session_id)
 
             if session_id:
                 st.session_state.session_id = session_id
@@ -397,24 +320,29 @@ with st.sidebar:
                 st.session_state.repo_url = repo_url
                 st.session_state.messages = []
                 st.success("Session Started")
-
             else:
                 st.error(f"Failed: {result.get('error', 'No session_id returned')}")
-
-
             st.rerun()
 
+    if ingest_btn and repo_url:
+        if not st.session_state.session_started:
+            st.warning("Please click 'Start' to create a session first!")
+        else:
+            with st.spinner("Ingesting repo..."):
+                result = api_ingest(repo_url, st.session_state.session_id)
+                if "error" in result:
+                    st.error(f"Failed: {result['error']}")
+                else:
+                    st.success("Ingestion complete!")
+                    st.session_state.ingested = True
 
     st.markdown("---")
-
     st.markdown('<p class="section-label">Quick Queries</p>', unsafe_allow_html=True)
  
     quick_queries = [
-        "What is the main entry point?",
-        "How does authentication work?",
-        "Which files import database?",
+        "What are the imports in tools.py?",
+        "What are the last 3 commits?",
         "Are there circular dependencies?",
-        "What are the main classes?",
     ]
 
     for q in quick_queries:
@@ -423,15 +351,11 @@ with st.sidebar:
                 st.session_state.pending_query = q
             else:
                 st.warning("Start a session first")
-
-
     
     st.markdown("---")
-
     if st.button("🗑 Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
-
 
     st.markdown(
         f'<p style="font-family: JetBrains Mono; font-size: 0.65rem; '
@@ -439,8 +363,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-
-
+# --- MAIN CHAT AREA ---
 col_h1 , col_h2 = st.columns([3,1])
 with col_h1:
     if st.session_state.repo_url:
@@ -449,7 +372,6 @@ with col_h1:
             f'color: #4a90d9; margin-bottom: 0;">📂 {st.session_state.repo_url}</p>',
             unsafe_allow_html=True
             )
-        
     else:
         st.markdown(
             '<p style="font-family: JetBrains Mono; font-size: 0.78rem; '
@@ -457,121 +379,124 @@ with col_h1:
             unsafe_allow_html=True
         )
 
-
 st.markdown("---")
 
-
-if not st.session_state.messages:
+if not st.session_state.messages and "pending_query" not in st.session_state:
     st.markdown("""
-                <div class="empty-state">
+        <div class="empty-state">
         <div class="empty-state-icon">⌗</div>
         <div class="empty-state-text">
-            Ingest a GitHub repo and start a session<br>
+            Start a session and Ingest a GitHub repo<br>
             to begin asking questions about the codebase
         </div>
     </div>
-    """, unsafe_allow_html=True
-    )
-
+    """, unsafe_allow_html=True)
 else:
     for msg in st.session_state.messages:
         if msg["role"] == "user":
-            st.markdown(
-                f'<div class="user-msg">👤 {msg["content"]}</div>',
-                unsafe_allow_html = True
-            )
-
+            st.markdown(f'<div class="user-msg">👤 {msg["content"]}</div>', unsafe_allow_html = True)
         else:
             steps_html = format_steps(msg.get("steps" , []))
-            
-            answer = msg["content"]
-            if hasattr(answer , "content"):
-                answer = answer.content
-
             st.markdown(
                 f'<div class="assistant-msg">'
-                f'<span style="color:#60a5fa; font-size:0.8rem; '
-                f'font-family: JetBrains Mono;">⌗ assistant</span><br><br>'
-                f'{answer}'
-                f'{steps_html}'
-                f'</div>',
+                f'<span style="color:#60a5fa; font-size:0.8rem; font-family: JetBrains Mono;">⌗ assistant</span><br><br>'
+                f'{msg["content"]}<br>{steps_html}</div>',
                 unsafe_allow_html=True
             )
 
-
+# Handle quick queries or direct input
+prompt = st.chat_input("Ask anything about the codebase...")
 if "pending_query" in st.session_state and st.session_state.pending_query:
-    query  = st.session_state.pending_query
+    prompt = st.session_state.pending_query
     st.session_state.pending_query = None
 
-    st.session_state.messages.append({"role": "user", "content": query})
+if prompt and st.session_state.session_started:
+    # 1. Render User Message Instantly
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.markdown(f'<div class="user-msg">👤 {prompt}</div>', unsafe_allow_html = True)
+
+    # 2. Setup placeholders for streaming
+    status_placeholder = st.empty()
+    msg_placeholder = st.empty()
     
-    with st.spinner("Tinking..."):
-        result = api_chat(st.session_state.session_id , query)
+    full_answer = ""
+    current_steps = []
 
-    
-    if "error" in result:
-        st.error(f"API Error: {result['error']}")
-
-    else:
-        answer = result.get("answer" , "No answer returned")
-
-        if hasattr(answer , "content"):
-            answer = answer.content
-
-
-        steps = result.get("steps" , [])
-
+    try:
+        # 3. Stream from the new backend architecture
+        payload = {"session_id": st.session_state.session_id, "query": prompt, "stream": True}
+        headers = {"x-user-id": st.session_state.user_id, "Content-Type": "application/json"}
+        
+        with requests.post(f"{API_BASE}/query/stream", headers=headers, json=payload, stream=True) as response:
+            if response.status_code != 200:
+                st.error(f"API Error: {response.text}")
+            else:
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        chunk_type = chunk.get("type")
+                        chunk_data = chunk.get("data", {})
+                        
+                        if chunk_type == "thinking":
+                            status_placeholder.markdown('<span class="status-pill status-active">🤔 Thinking...</span>', unsafe_allow_html=True)
+                            
+                        elif chunk_type == "tool_call":
+                            tool_name = chunk_data.get("tool_name", "unknown")
+                            current_steps.append(tool_name)
+                            status_placeholder.markdown(f'<span class="status-pill status-active">🔧 Running {tool_name}...</span>', unsafe_allow_html=True)
+                            
+                            # Real-time update of the assistant div with the new steps badge!
+                            steps_html = format_steps(current_steps)
+                            msg_placeholder.markdown(
+                                f'<div class="assistant-msg">'
+                                f'<span style="color:#60a5fa; font-size:0.8rem; font-family: JetBrains Mono;">⌗ assistant</span><br><br>'
+                                f'{full_answer}▌<br>{steps_html}</div>',
+                                unsafe_allow_html=True
+                            )
+                            
+                        elif chunk_type == "text":
+                            status_placeholder.empty()
+                            full_answer += chunk_data.get("text", "")
+                            steps_html = format_steps(current_steps)
+                            
+                            # Stream the text inside your beautiful custom div
+                            msg_placeholder.markdown(
+                                f'<div class="assistant-msg">'
+                                f'<span style="color:#60a5fa; font-size:0.8rem; font-family: JetBrains Mono;">⌗ assistant</span><br><br>'
+                                f'{full_answer}▌<br>{steps_html}</div>',
+                                unsafe_allow_html=True
+                            )
+                            
+                        elif chunk_type == "end":
+                            status_placeholder.empty()
+                            steps_html = format_steps(current_steps)
+                            
+                            # Remove the blinking cursor (▌) at the end
+                            msg_placeholder.markdown(
+                                f'<div class="assistant-msg">'
+                                f'<span style="color:#60a5fa; font-size:0.8rem; font-family: JetBrains Mono;">⌗ assistant</span><br><br>'
+                                f'{full_answer}<br>{steps_html}</div>',
+                                unsafe_allow_html=True
+                            )
+                            
+                    except json.JSONDecodeError:
+                        pass
+        
+        # Save to memory so it stays on screen when the page refreshes
         st.session_state.messages.append({
-            "role":"assistant",
-            "content": answer,
-            "steps":steps
+            "role": "assistant", 
+            "content": full_answer, 
+            "steps": current_steps
         })
 
-    st.rerun()
+    except Exception as e:
+        st.error(f"Connection failed: {e}")
 
-
-if st.session_state.session_started:
-    if prompt := st.chat_input("Ask anything about the codebase..."):
-        st.session_state.messages.append({"role": "user" , "content":prompt})
-
-        with st.spinner("Thinking..."):
-            result = api_chat(st.session_state.session_id , prompt)
-
-            if "error" in result:
-                st.error(f"API Error: {result['error']}")
-                st.session_state.messages.pop()
-
-
-            else:
-                answer = result.get("answer" , "No answer returned")
-
-                if hasattr(answer , "content"):
-                    answer = answer.content
-
-                steps = result.get('steps', [])
-
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "steps": steps
-                })
-
-            st.rerun()
-
-else:
-    st.markdown(
-        '<p style="text-align:center; color:#2d3748; font-size:0.85rem; '
-        'font-family: JetBrains Mono; padding: 1rem;">← Ingest a repo and start a session to chat</p>',
-        unsafe_allow_html=True
-    )
-
-
-
-
-
-
-
-
+elif prompt and not st.session_state.session_started:
+    st.warning("Please click 'Start' in the sidebar to begin a session first!")
 
 
 

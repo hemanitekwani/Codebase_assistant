@@ -1,5 +1,8 @@
 from sentence_transformers import SentenceTransformer
+import os
 
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 class Embedder:
     def __init__(self, model_name = "all-MiniLM-L6-v2"):

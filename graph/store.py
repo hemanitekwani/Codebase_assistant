@@ -43,7 +43,7 @@ class GraphStore:
                     "edges": edges,
                     "node_count": len(nodes),
                     "edge_count": len(edges),
-                    "updated_at": datetime.utcnow()
+                    "updated_at": datetime.now()
                     }
                 },
                 upsert = True

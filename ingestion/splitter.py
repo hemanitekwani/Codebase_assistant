@@ -1,9 +1,9 @@
 from langchain_community.document_loaders.parsers import LanguageParser
-from langchain_community.document_loaders.generic import GenericLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter , Language
-
-from langchain_community.document_loaders import DirectoryLoader , TextLoader
+from langchain_core.documents.base import Blob
+from langchain_core.documents import Document
 from pathlib import Path
+import os
 
 language_map = {
     ".py" : Language.PYTHON,
@@ -18,72 +18,68 @@ class Splitter:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-    def split(self, repo_path):
-        all_docs = []
+    def split(self, raw_docs):
+        all_chunks = []
 
-        for suffix, language in language_map.items():
-            loader = GenericLoader.from_filesystem(
-                repo_path,
-                glob=f"**/*{suffix}",
-                suffixes = [suffix],
-                parser = LanguageParser(parser_threshold = 0)
+        for doc_dict in raw_docs:
+            content = doc_dict.get("page_content", "")
+            metadata = doc_dict.get("metadata", {})
+            file_path = metadata.get("source", "")
 
-            )
+            _, ext = os.path.splitext(file_path)
+
             try:
-                docs = loader.load()
-                print(f"Docs to insert: {len(docs)}")
+                if ext in language_map:
+                    language = language_map[ext]
+
+                    blob = Blob.from_data(
+                        data=content.encode("utf-8"), 
+                        path=file_path
+                    )
+                    parser = LanguageParser(language=language, parser_threshold=0)
+                    parsed_docs = list(parser.lazy_parse(blob))
+
+                    for doc in parsed_docs:
+                        doc.metadata.update(metadata)
+
+
+                    splitter = RecursiveCharacterTextSplitter.from_language(
+                        language=language,
+                        chunk_size=self.chunk_size,
+                        chunk_overlap=self.chunk_overlap
+                    )
                 
-                if docs:
-                    print(f"First doc type: {type(docs[0])}")
-                    print(f"First doc content: {docs[0].page_content[:100]}")
-                    print(f"First doc metadata: {docs[0].metadata}")
+                    chunks = splitter.split_documents(parsed_docs)
+                    all_chunks.extend(chunks)
 
 
-                if not docs:
-                    continue
+                elif ext == ".md": 
+                    lc_docs = Document(page_content=content,metadata=metadata)
+                    
+                    splitter = RecursiveCharacterTextSplitter(
+                        chunk_size = self.chunk_size,
+                        chunk_overlap = self.chunk_overlap
+                    )
 
-                splitter = RecursiveCharacterTextSplitter.from_language(
-                    language = language,
-                    chunk_size = self.chunk_size,
-                    chunk_overlap = self.chunk_overlap
-                )
+                    chunks = splitter.split_documents([lc_docs])
+                    all_chunks.extend(chunks)
+                
+                else: ## .txt,.env 
+                    lc_doc = Document(page_content=content,metadata=metadata)
 
-                chunks = splitter.split_documents(docs)
-                all_docs.extend(chunks)
-                print(f"  {suffix}: {len(docs)} docs → {len(chunks)} chunks")
+                    splitter = RecursiveCharacterTextSplitter(
+                        chunk_size = self.chunk_size,
+                        chunk_overlap = self.chunk_overlap 
+                    )
+
+                    chunks = splitter.split_documents([lc_docs])
+                    all_chunks.extend(chunks)
             
             except Exception as e:
-                print(f" Skipped {suffix}: {e}")
+                print(f"[SPLITTER] Skipped splitting for {file_path}: {e}")
         
+        print(f"\n[SPLITTER] Total Meaningful Vector Chunks Generated: {len(all_chunks)}")
 
-        try:
-            md_loader = DirectoryLoader(
-                repo_path,
-                glob = "**/*.md",
-                loader_cls = TextLoader,
-                loader_kwargs = {"autodetect_encoding": True}
-            )
+        return all_chunks
 
-            md_docs = md_loader.load()
-
-            text_splitter = RecursiveCharacterTextSplitter(
-               chunk_size = self.chunk_size,
-               chunk_overlap = self.chunk_overlap, 
-            )
-
-            md_chunks = text_splitter.split_documents(md_docs)
-            all_docs.extend(md_chunks)
-
-        
-        except Exception as e:
-            print(f"Skipped .md: {e}")
-
-        print(f"\n Total Chunks: {len(all_docs)}")
-
-        
-
-        return all_docs
-    
-
-
-
+                

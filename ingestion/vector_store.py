@@ -36,7 +36,7 @@ class VectorStore:
             print(f"Error connecting to MongoDB: {e}")
 
 
-    def insert_embeddings(self,docs , repo_url):
+    def insert_embeddings(self,docs , repo_url,session_id):
         for doc in docs:
             try:
                 raw_text = doc.page_content if isinstance(doc.page_content, str) else "\n".join(doc.page_content)
@@ -56,13 +56,15 @@ class VectorStore:
 
                 self.collection.insert_one({
                     "ids" : str(uuid.uuid4()),
+                    "session_id":str(session_id),
                     "page_content": enriched_text,
                     "embedding" : embedding,
                     "metadata" : {
                         "repo_url": repo_url,
                         "source": source,
                         "content_type": "code",
-                        "language": language
+                        "language": language,
+                        "session_id": str(session_id)
                     },
                    
                 })

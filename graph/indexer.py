@@ -5,8 +5,9 @@ from pathlib import Path
 
 
 class GraphIndexer:
-    def __init__(self , vector_store):
+    def __init__(self , vector_store , session_id):
         self.vector_store = vector_store
+        self.session_id = session_id
 
     
     def index(self , graph:rx.PyDiGraph , repo_url:str):
@@ -61,12 +62,16 @@ class GraphIndexer:
                 metadata = chunk["metadata"]
                 filename = metadata["source"]
 
+                if hasattr(self, 'session_id'):
+                    metadata["session_id"] = str(self.session_id)
+
                 enriched = f"File: {filename} | Type: graph_relationship\n\n{text}"
 
                 embedding = self.vector_store.embedder.get_embeddings(enriched).tolist()
 
                 self.vector_store.collection.insert_one({
                     "_id": str(uuid.uuid4()),
+                    "session_id": str(self.session_id),
                     "page_content": enriched,
                     "embedding": embedding,
                     "metadata": metadata,

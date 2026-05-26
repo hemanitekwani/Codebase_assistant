@@ -45,7 +45,7 @@ from langchain_ollama import ChatOllama
 
 
 class Generate_response:
-    def __init__(self, model_name="qwen2.5-coder:1.5b"):
+    def __init__(self, model_name="llama-3.3-70b-versatile"):
            
         print("Loading model into memory")
 

@@ -5,13 +5,7 @@ from pathlib import Path
 import cohere
 
 
-GENERIC_WORDS  = {
-    "how" , "does" , "work" , "what" , "is" , "the" , "a" , "an" , "do",
-    "where", "why", "when", "which", "who", "can", "could", "would",
-    "should", "this", "that", "in", "on", "at", "to", "for", "of",
-    "and", "or", "not", "with", "from", "by", "are", "was", "were"
 
-}
 
 
 class vector_retrieval:
@@ -45,17 +39,18 @@ class vector_retrieval:
         return reranked
 
 
-    def retrieve(self , query , repo_url , top_k = 5 , mode ="semantic"):
+    def retrieve(self , query , session_id, top_k = 5 , mode ="semantic"):
         query_embedding = self.embedder.get_embeddings(query).tolist() 
-        
+        safe_session_id = str(session_id)
+
         if mode == 'graph':
             filter_graph = {
-                "metadata.repo_url": {"$eq": repo_url},
+                "metadata.session_id": {"$eq": safe_session_id},
                 "metadata.content_type": {"$eq": "graph_relationship"}
             }
 
             filter_code = {
-                "metadata.repo_url": {"$eq": repo_url},
+                "metadata.session_id": {"$eq": safe_session_id},
                 "metadata.content_type":{"$ne":"graph_relationship"}
             }
 
@@ -68,9 +63,9 @@ class vector_retrieval:
         
 
         else:
-            filter_all = {"metadata.repo_url": {"$eq": repo_url}}
+            filter_all = {"metadata.session_id": {"$eq": safe_session_id}}
             results = self._vector_search(query_embedding, filter_all , 20)
-            return self._boost_and_rerank(query , results , top_k , repo_url)
+            return self._boost_and_rerank(query , results , top_k)
 
 
     def _vector_search(self,query_embedding , filter , limit):
@@ -102,41 +97,14 @@ class vector_retrieval:
 
         return list(self.collection.aggregate(pipeline))
 
-    def _boost_and_rerank(self , query , results , top_k, repo_url):
-        final = []
+    def _boost_and_rerank(self , query , results , top_k):
+        if not results:
+            return []
+        
+        print(f"Sending {len(results)} chunks to Cohere for reranking")
 
         
-        all_docs = self.collection.distinct("metadata.source", {"metadata.repo_url": repo_url})
-        
-        all_filenames = [Path(src).stem.lower() for src in all_docs]
-        
-        
-        query_words = {
-            w.strip("?.,") for w in query.lower().split() if w not in GENERIC_WORDS
-        }
-
-        matched_keyword = [file  for file in all_filenames if file in query_words  ]
-        
-        normal = []
-        boosted = []
-        
-        for r in results:
-            source_stem = Path(r['metadata'].get('source' , '')).stem.lower()
-
-            if any(match in source_stem for match in matched_keyword):
-                boosted.append(r)
-
-            else:
-                normal.append(r)
-
-        final = (normal + boosted)[:top_k]
-
-        
-        for r in final:
-            print(f" Score: {r['score']:.4f} | File: {Path(r['metadata'].get('source','')).name}")
-
-        
-        reranked = self.rerank_chunks(query , final , top_k)
+        reranked = self.rerank_chunks(query , results , top_k)
 
         for r in reranked:
             vector_score = r.get('score' , 0)
