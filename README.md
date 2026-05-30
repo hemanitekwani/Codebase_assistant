@@ -1,159 +1,431 @@
+# 🧠 Codebase Assistant
 
-🧠Codebase Assistant - AI-Powered Repository Navigator
-A conversational AI assistant designed to ingest, index, and navigate complex GitHub repositories. Built with a modern microservices architecture using LangGraph, FastAPI, Streamlit, and MongoDB Atlas Vector Search. It features hybrid RAG capabilities, combining semantic search with structural graph indexing.
+### AI-Powered Repository Navigator
 
-✨ Features
-🤖 AI Agent Architecture
+Codebase Assistant is an intelligent conversational AI system designed to ingest, understand, index, and navigate large GitHub repositories.
 
-LangGraph Orchestration: Stateful, ReAct-style agent workflow.
+Built using **LangGraph**, **FastAPI**, **Streamlit**, and **MongoDB Atlas Vector Search**, it combines **semantic retrieval**, **graph-based code understanding**, and **tool-augmented reasoning** to help developers explore unfamiliar codebases through natural language.
 
-Streaming Responses: Real-time token streaming to the UI via Server-Sent Events (SSE).
+---
 
-Conversation Memory: Multi-turn interactions persisted in MongoDB.
+# ✨ Features
 
-Dynamic Tool Calling: LLM intelligently selects the right tool for searching code or navigating dependencies.
+## 🤖 AI Agent Architecture
 
-🔐 Multi-User Session Isolation
+### LangGraph Orchestration
 
-Secure X-User-Id header-based routing.
+* Stateful multi-step agent workflow
+* Tool-aware reasoning loop
+* Structured execution pipeline
 
-Isolated chat histories and active agents per user session.
+### Streaming Responses
 
-Encrypted cookie management on the frontend.
+* Real-time response streaming via Server-Sent Events (SSE)
+* Live tool execution updates
+* Incremental answer generation
 
-📚 Graph & Vector RAG Pipeline
+### Conversation Memory
 
-MongoDB Atlas: Unified storage for vectors, graph edges, and chat memory.
+* Multi-turn repository conversations
+* Persistent chat history
+* Context-aware follow-up questions
 
-Local Embeddings: Uses Hugging Face all-MiniLM-L6-v2 (via sentence-transformers) for high-quality, free semantic embeddings.
+### Dynamic Tool Calling
 
-Graph Indexing: Uses rustworkx to map file dependencies, imports, and codebase structure.
+The agent intelligently selects tools such as:
 
-🛠️ Agent Tools
+* Semantic Code Search
+* File Retrieval
+* Dependency Analysis
+* Graph Navigation
 
-vector_retrieval: Semantic search across the codebase for concepts and logic.
+without requiring manual intervention.
 
-file_match: Direct retrieval of specific file contents.
+---
 
-(Extendable factory pattern to easily add GitHub API or web search tools)
+# 🔐 Multi-User Session Isolation
 
-💾 Data Persistence
+Designed for multi-user environments.
 
-Fully remote storage via MongoDB Atlas (no local volumes required for data).
+### Features
 
-Automatic document deduplication and index management.  
+* Secure `X-User-Id` based routing
+* Isolated repositories per session
+* Independent conversation histories
+* Active agent separation
+* Encrypted frontend cookie management
 
-🚀 Quick Start
+---
 
-Installation & Setup
+# 📚 Hybrid RAG Pipeline
 
-1. Clone the repository:
+Traditional RAG struggles with understanding relationships between files.
+
+Codebase Assistant combines:
+
+### Vector Retrieval
+
+Used for:
+
+* Semantic code search
+* Concept discovery
+* Logic tracing
+* Function lookup
+
+### Graph Retrieval
+
+Used for:
+
+* Import relationships
+* Dependency tracking
+* File-level structure
+* Repository navigation
+
+This hybrid architecture allows the assistant to understand both:
+
+* **What code means**
+* **How code is connected**
+
+---
+
+# 🛠️ Agent Tooling
+
+## Semantic Retrieval
+
+Search repository content using vector embeddings.
+
+```text
+"Where is authentication implemented?"
+```
+
+```text
+"Show me JWT validation logic."
+```
+
+---
+
+## Direct File Retrieval
+
+Retrieve exact file contents when the user asks for specific files.
+
+```text
+"Open tools.py"
+```
+
+```text
+"Show app.py"
+```
+
+---
+
+## Dependency Analysis
+
+Inspect:
+
+* Imports
+* Module relationships
+* Internal dependencies
+
+---
+
+## Extensible Tool Framework
+
+New tools can be added easily through the factory pattern.
+
+Examples:
+
+* GitHub API Tools
+* Jira Integration
+* Documentation Search
+* Web Search
+* Code Execution Tools
+
+---
+
+# 💾 Data Persistence
+
+All application state is stored remotely using MongoDB Atlas.
+
+### Benefits
+
+* No local volumes required
+* Persistent sessions
+* Scalable architecture
+* Cloud-native deployment
+
+---
+
+# 🏗️ System Architecture
+
+```text
+                    ┌─────────────┐
+                    │  Streamlit  │
+                    │  Frontend   │
+                    └──────┬──────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │   FastAPI   │
+                    │   Backend   │
+                    └──────┬──────┘
+                           │
+        ┌──────────────────┴──────────────────┐
+        │                                     │
+        ▼                                     ▼
+
+ ┌──────────────┐                     ┌──────────────┐
+ │ Repository   │                     │  LangGraph   │
+ │ Ingestion    │                     │    Agent     │
+ └──────┬───────┘                     └──────┬───────┘
+        │                                    │
+        ▼                                    ▼
+ ┌──────────────┐                     ┌──────────────┐
+ │ Chunking &   │                     │ Tool Calling │
+ │ Embeddings   │                     │ + Retrieval  │
+ └──────┬───────┘                     └──────┬───────┘
+        │                                    │
+        └──────────────┬─────────────────────┘
+                       ▼
+               ┌──────────────┐
+               │ MongoDB      │
+               │ Atlas        │
+               │ • Vectors    │
+               │ • Sessions   │
+               │ • Graph Data │
+               └──────────────┘
+
+# 🔄 LangGraph Workflow
+
+```text
+          START
+             │
+             ▼
+     ┌─────────────┐
+     │ LLM Reason  │
+     └──────┬──────┘
+            │
+            ▼
+     Need Tool Call?
+        /       \
+      Yes       No
+       │         │
+       ▼         ▼
+ ┌───────────┐  END
+ │ Tool Node │
+ └─────┬─────┘
+       │
+       ▼
+  Tool Results
+       │
+       ▼
+ Back To LLM
+```
+
+---
+
+# 🚀 Quick Start
+
+## 1. Clone Repository
+
+```bash
 git clone https://github.com/yourusername/codebase-assistant.git
+
 cd codebase-assistant
+```
 
-2.Set up environment variables:
-Create a .env file in the root directory:
+---
 
+## 2. Configure Environment Variables
 
-# API Keys
+Create a `.env` file:
+
+```env
+# LLM Provider
 GROQ_API_KEY=your_groq_api_key
-COHERE_API_KEY=your_cohere_key
 
-# MongoDB Configuration
-MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/
+# Optional Reranker
+COHERE_API_KEY=your_cohere_api_key
 
-3.Build and Run the Containers:
+# MongoDB Atlas
+MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/
+```
 
+---
+
+## 3. Build and Run
+
+```bash
 docker compose up --build
-Access the Application
-🎨 Streamlit App: http://localhost:8501
+```
 
-📖 API Documentation (Swagger): http://localhost:8000/docs
+---
 
-docs
+# 🌐 Access the Application
 
-🎨 Streamlit Web Interface
-A beautiful, interactive web interface for exploring your codebases.
+### Streamlit UI
 
-Features:
+```text
+http://localhost:8501
+```
 
-1.Session Management: Automatically handles User IDs via encrypted cookies.
+### FastAPI Docs
 
-2.Repository Ingestion: Simply paste a GitHub URL to trigger the backend cloning and embedding pipeline.
+```text
+http://localhost:8000/docs
+```
 
-3.Real-time Chat: Interactive chat window with live-streaming responses.
+---
 
-4.Status Indicators: Visual feedback during the heavy lifting of indexing and embedding.
+# 🎨 Streamlit Interface
 
-Quick Start via Browser:
-Simply navigate to http://localhost:8501 after running docker compose up.
+The frontend provides an intuitive repository exploration experience.
 
+### Features
 
-API Usage (For Direct API Access)
-Authentication
-All endpoints require authentication via the X-User-Id header to maintain session isolation.
+✅ Session Management
 
-Endpoints
-1. POST /session/start - Initialize a Session
-Registers a user and target repository.
+✅ Repository Ingestion
 
+✅ Real-Time Chat
+
+✅ Streaming Responses
+
+✅ Tool Execution Visibility
+
+✅ Status Indicators
+
+---
+
+# 📡 API Usage
+
+## Authentication
+
+All endpoints require:
+
+```http
+X-User-Id
+```
+
+for user isolation.
+
+---
+
+## Start Session
+
+```bash
 curl -X POST http://localhost:8000/session/start \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: user_123" \
-  -d '{"repo_url": "https://github.com/user/repo"}'
+-H "Content-Type: application/json" \
+-H "X-User-Id: user_123" \
+-d '{
+  "repo_url":"https://github.com/user/repo"
+}'
+```
 
+---
 
-2. POST /ingest - Process a Repository
-Clones, splits, embeds, and indexes the codebase.
+## Ingest Repository
 
+```bash
 curl -X POST http://localhost:8000/ingest \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: user_123" \
-  -d '{"repo_url": "https://github.com/user/repo", "session_id": "session_abc"}'
+-H "Content-Type: application/json" \
+-H "X-User-Id: user_123" \
+-d '{
+  "repo_url":"https://github.com/user/repo",
+  "session_id":"session_abc"
+}'
+```
 
-3. POST /query/stream - Chat with the Codebase
-Streams the LLM response via NDJSON
+---
 
+## Query Repository
+
+```bash
 curl -X POST http://localhost:8000/query/stream \
-  -H "Content-Type: application/json" \
-  -H "X-User-Id: user_123" \
-  -d '{"session_id": "session_abc", "query": "Where is the authentication logic located?"}'
+-H "Content-Type: application/json" \
+-H "X-User-Id: user_123" \
+-d '{
+  "session_id":"session_abc",
+  "query":"Where is the authentication logic located?"
+}'
+```
 
+---
 
-🏗️Architecture
+# 📊 MongoDB Collections
 
-User Request → Streamlit UI → Docker Network → FastAPI Backend
-                                                    ↓
-                                            [Session Manager]
-                                                    ↓
-                              ┌─────────────────────┴─────────────────────┐
-                              │                                           │
-                        Ingestion Route                              Chat Route
-                        (Git Clone)                               (LangGraph Agent)
-                              ↓                                           ↓
-                      [Text Splitter]                              [Tool Execution]
-                              ↓                                           ↓
-                 [Sentence Transformers]                    [Vector/Graph Retrieval]
-                              ↓                                           ↓
-                      [MongoDB Atlas]  ← ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  [Context Sync]
+## vector_store
 
+Stores:
 
-LangGraph State Machine
+* Code chunks
+* Embeddings
+* Metadata
+* Repository references
 
-Entry → LLM Node (Decision) → Should Call Tool?
-          ↑                        ├─ Yes → Tool Executor Node ─┐
-          │                        └─ No → END                  │
-          └─────────────────────────────────────────────────────┘
+---
 
+## graph_store
 
-🎯 Key Design Decisions- 
-1. Why Graph + Vector (Hybrid RAG)?
-Codebases are highly relational. Semantic vector search is great for finding concepts, but Graph indexing ensures the AI understands dependencies (e.g., "File A imports File B").
+Stores:
 
-📊 Database Schema (MongoDB Collections)
-vector_store: Contains chunked code strings, embedding vectors, and metadata (file path, repo URL).
+* Nodes
+* Edges
+* Dependency relationships
+* Repository structure
 
-graph_store: Contains serialized rustworkx nodes and edges mapping the repository structure.
+---
 
-sessions: Contains session_id, user_id, and conversational message history (HumanMessage, AIMessage).
+## sessions
+
+Stores:
+
+* Session IDs
+* User IDs
+* Conversation history
+* Context memory
+
+---
+
+# 🎯 Key Design Decisions
+
+## Why Hybrid RAG?
+
+Codebases are highly relational systems.
+
+Vector search answers:
+
+> "What does this code do?"
+
+Graph search answers:
+
+> "How is this code connected?"
+
+Combining both provides significantly better repository understanding than traditional vector-only RAG systems.
+
+---
+
+# 🧰 Tech Stack
+
+| Layer            | Technology                               |
+| ---------------- | ---------------------------------------- |
+| Frontend         | Streamlit                                |
+| Backend          | FastAPI                                  |
+| Agent Framework  | LangGraph                                |
+| LLM              | Groq                                     |
+| Embeddings       | Sentence Transformers (all-MiniLM-L6-v2) |
+| Database         | MongoDB Atlas                            |
+| Vector Search    | Atlas Vector Search                      |
+| Graph Engine     | rustworkx                                |
+| Containerization | Docker                                   |
+| Orchestration    | Docker Compose                           |
+
+---
+
+# 📜 License
+
+MIT License
+
+---
+
+Built to make understanding large codebases conversational, searchable, and significantly faster.
 
