@@ -1,491 +1,276 @@
-import asyncio
-import json
+import os
 import logging
 from datetime import datetime
-from typing import AsyncGenerator,List,TypedDict,Dict , Any , Optional
-from dataclasses import asdict
-
-from groq import AsyncGroq
-
-from agent.state import Message , AgentState , ToolResult,StreamEvent
-
-from tools.definitions import TOOL_REGISTRY , get_tool_definitions , validate_tool_list
-
-from tools.tools_implementation import CodebaseTools
-import re
-import os
+from typing import AsyncGenerator, Dict, Any, List
 from dotenv import load_dotenv
 
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage,BaseMessage
+from langgraph.graph import StateGraph, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
 
-load_dotenv()
+from agent.state import AgentState, StreamEvent
+from tools.tools_implementation import get_agent_tools # <--- Uses the factory we built!
 
 logger = logging.getLogger(__name__)
 
+load_dotenv()
+
 
 class CodebaseAgent:
-    def __init__(self, session_id:str , model:str ="llama-3.3-70b-versatile" , repo_path:str='.',vector_db=None):
-        self.model = model
-        self.conversation_history: List[Message] = []
-        self.max_history=50
-        self.system_prompt = self._build_system_prompt()
- 
-        self.client = AsyncGroq(api_key=os.environ.get("GROQ_API_KEY"))
+    def __init__(self, session_id: str, user_id:str , model: str = "llama-3.3-70b-versatile", repo_path: str = '.', vector_db=None,max_iterations=15):
         self.session_id = session_id
-        self.tools = CodebaseTools(collection = vector_db , session_id = self.session_id)
+        self.model = model
+        self.vector_db = vector_db
+        self.user_id = user_id
 
-
-
-
-    def _build_system_prompt(self)->str:
-        """Build comprehensive system prompt"""
-        return """You are an expert codebase assistant. Your role is to help developers understand, navigate, and work with their codebases efficiently.
- 
-        ## Capabilities
-        You have access to specialized tools for:
-        - **Code Search**: Semantic, keyword search across the codebase
-        - **File Operations**: Find files, read content, list directories
-        - **Code Analysis**: Analyze functions, classes, dependencies
-        - **Git Integration**: Get history, blame information
+        self.max_iterations=max_iterations
         
- 
-        ## Your Approach
-        1. **Understand the Context**: Ask clarifying questions if needed
-        2. **Use the Right Tool**: Choose the most efficient tool for the task
-        3. **Show Your Thinking**: Explain what you're looking for and why
-        4. **Provide Context**: Include relevant code snippets in responses
-        5. **Be Accurate**: Use exact file paths and line numbers
-        6. **Handle Edge Cases**: Gracefully handle missing files or errors
- 
-        ## Behavior Guidelines
-        - Always verify tool results before providing final answers
-        - If a tool fails, try alternative approaches
-        - Provide file paths relative to repo root
-        - Include line numbers for code references
-        - Explain complex code structures in simple terms
-        - Chain tools together when needed to answer complex questions
- 
-        ## Response Format
-        When providing code examples:
-        ```language
-        code here
-        ```
- 
-        When referencing files:
-         `file_path/to/file.py:line_number`
- 
-        When summarizing findings:
-        - Start with the main answer
-        - Provide relevant code context
-        - Link related files or functions
-        - Suggest next steps if applicable 
+        self.tools = get_agent_tools(self.session_id, self.user_id ,self.vector_db)
         
-        CRITICAL RULE: When calling a function, you MUST ONLY use the exact parameters defined in the schema. Do not hallucinate or invent new parameters. Ensure integers are integers, not strings."
-        """
-    
-
-    def add_messages(self, role:str , content:str , tool_calls:List[Dict]=None,tool_results:List[ToolResult] = None):
-        msg = Message(
-            role = role,
-            content = content,
-            toolcalls = tool_calls or [],
-            tool_result = tool_results or []
+        self.llm = ChatGroq(
+            model=self.model,
+            temperature=0.0,
+            api_key=os.environ.get("GROQ_API_KEY"),
+            max_retries=2
         )
-
-        self.conversation_history.append(msg)
-
-        if len(self.conversation_history) > self.max_history:
-            self.conversation_history = self.conversation_history[-self.max_history:]
-
-
-    def _format_messages_for_groq(self) -> list:
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
         
-        clean_messages = []
-
-        strict_prompt = self.system_prompt + "\n\nCRITICAL RULE: When calling a function, you MUST ONLY use the exact parameters defined in the schema. Do not hallucinate or invent new parameters. Ensure integers are integers, not strings."
+        workflow = StateGraph(AgentState)
         
-        clean_messages.append({"role": "system", "content": strict_prompt})
+        workflow.add_node("agent", self.call_model)
+        workflow.add_node("tools", ToolNode(self.tools)) 
+
+
+        workflow.add_edge(START, "agent")
+
+        workflow.add_conditional_edges("agent", tools_condition) # Auto-routes to 'tools' or 'END' natively!
         
-        for msg in self.conversation_history:
-
-            if hasattr(msg ,"role"):
-               role = msg.role
-               content = getattr(msg,"content","")
-
-            elif hasattr(msg , "type"):
-                role = "assistant" if msg.type == "ai" else "user"
-                content = getattr(msg, "content", "")
-            elif isinstance(msg, dict):
-                role = msg.get("role")
-                content = msg.get("content", "")
-            else:
-                continue
-
-            if not isinstance(content , str):
-                content = str(content) if content is not None else ""
-
-
+        workflow.add_edge("tools","agent")
 
         
-            if role in ["user", "assistant", "system","ai"]:
-                mapped_role = "assistant" if role == "ai" else role
-                clean_messages.append({
-                    "role": mapped_role,
-                    "content": content
-                })
+        self.graph = workflow.compile()
+        self.conversation_history:List[BaseMessage] = [] ## LONG TERM MEMORY FOR QA
+
+    def _build_system_prompt(self) -> str:
+        return """You are a senior codebase assistant. 
+                Instructions:
+                1. Use the provided tools to search the repository.
+                2. When a tool returns the information you need, your search is complete.
+                3. Do not call any further tools once you have the answer.
+                4. Generate your final response to the user immediately.
+               """
+        
+
+    # async def reasoning_node(self,state):
+    #     messages=state["messages"]
+
+    #     prompt = """
+    #             You are evaluating tool outputs.
+    #             Decide:
+    #                - Do we need more tool calls?
+    #                - Or can we answer now?
+                   
+    #             Reply ONLY:
                 
-        return clean_messages
+    #             STATUS: CONTINUE
+
+    #             or
+
+    #             STATUS: END
+                
+    #             """
+
+    #     response=await self.llm.ainvoke([
+    #         SystemMessage(content=prompt),
+    #         *messages
+    #     ])
+
+    #     return {
+    #         "messages":[response]
+    #     }
+
+    async def call_model(self, state: AgentState):
+        messages = state["messages"]
+
+
+        sys_prompt = SystemMessage(content=self._build_system_prompt())
+        
+        response = await self.llm_with_tools.ainvoke([sys_prompt] + messages)
+        return {"messages": [response]}
     
+
+    # def _should_continue(self,state):
+    #     messages = state["messages"]
+
+    #     last_message = messages[-1]
+
+    #     text = str(last_message.content).lower()
+
+    #     if "continue" in text:
+    #         return "agent"
+        
+    #     return "final"
+     
+    # async def generate_final_answer(self,state:AgentState):
+    #     messages = state["messages"]
+
+    #     clean_messages = [m for m in messages if not (isinstance(m, AIMessage) and "STATUS: END" in str(m.content))]
+
+    #     prompt = """
+    #             You are generating the final response to the user.
+    #             Use:
+    #                - tool outputs
+    #                - retrieved code
+    #                - repository findings
+ 
+    #             Generate:
+    #                - concise
+    #                - accurate
+    #                - developer-friendly answer
+
+    #             Include:
+    #               - exact file paths
+    #               - relevant snippets
+    #               - explanations
+    #             """
+
+    #     response = await self.llm.ainvoke([
+    #             SystemMessage(content=prompt),
+    #             *clean_messages
+    #     ])
+
+    #     return {
+    #         "messages":[response]
+    #     } 
+        
 
     async def stream_response(self, query: str) -> AsyncGenerator[StreamEvent, None]:
-        self.add_messages("user", query)
+        """Streams the LangGraph execution back to the FastAPI frontend."""
+        MAX_HISTORY = 15
 
-        yield{
-           "type": "thinking",
-           "data": {"thought": "Analyzing your query and determining the best approach..."},
-           "timestamp": datetime.now().isoformat()
+        yield {
+            "type": "thinking",
+            "data": {"thought": "Analyzing your query and determining the best approach...","session_id":self.session_id},
+            "timestamp": datetime.now().isoformat()
         }
+        logger.info( f"[SESSION:{self.session_id}] Query={query}")
+
+        execution_messages = self.conversation_history.copy()
+
+        execution_messages.append(HumanMessage(content=query))
+
+        final_answer = ""
         
-        message = self._format_messages_for_groq()
-
         try:
-            tool_def = get_tool_definitions()
-
-            kwargs = {
-                "model":self.model,
-                "messages":message,
-                "stream":False,
-                "parallel_tool_calls":False,
-                "temperature":0.0
-            }
-
-            if tool_def:
-                kwargs["tools"] = tool_def
-
-                kwargs["tool_choice"] = "auto"
-                print(f"[AGENT] Firing payload to Groq Cloud WITH {len(tool_def)} TOOLS ACTIVE...")
+            config = {"recursion_limit": self.max_iterations} 
             
-            else:
-                print(f"[AGENT] WARNING: tool_defs is empty! Tools are NOT active.")
-
-            response = await self.client.chat.completions.create(**kwargs)
-            
-            if response is None:
-                raise ValueError("Groq returned an empty response.")
-
-            
-            response_message = response.choices[0].message
-
-            full_response = response_message.content or ""
-
-            if full_response:
-                yield {
-                    "type": "text",
-                    "data": {"text":full_response},
-                    "timestamp":datetime.now().isoformat()
-                }
-            
-            
-            current_tool_calls = []
-
-            if getattr(response_message , 'tool_calls',None):
-                for tool_call in response_message.tool_calls:
-                    t_name = tool_call.function.name
-                    t_args_str = tool_call.function.arguments
-
-                    print(f"\n[TOOL DETECTED]: AI is calling '{t_name}'")
-                    print(f"[TOOL ARGS]: {t_args_str}")
-
-                    t_args = {}
-
-                    if t_args_str:
-                        try:
-                            t_args = json.loads(t_args_str)
-
-                        except Exception:
-                            t_args = {}
-
-                    current_tool_calls.append({
-                        "function": {
-                            "name": t_name,
-                            "arguments": t_args
-                        }
-                    })
-
-                    yield{
-                        "type": "tool_call",
-                        "data": {
-                            "tool_name": t_name,
-                            "input": t_args
-                        },
-                        "timestamp": datetime.now()
-                    }
-            if current_tool_calls:
-                self.add_messages("assistant", full_response, tool_calls=current_tool_calls)
-                tool_result_list = []
-
-                for tc in current_tool_calls:
-                    func = tc.get('function', {})
-                    name = func.get('name')
-                    args = func.get('arguments', {})
-
-                    if not name:
-                        continue
-
-                    result_data = await self._execute_tool(name, args)
-
-                    yield{
-                        "type": "tool_result",
-                        "data": result_data,
-                        "timestamp": datetime.now()
-                    } 
-
-                    tool_result_list.append(ToolResult(
-                        tool_name=name, 
-                        success=result_data.get("success", False),
-                        output=result_data
-                    ))
-
-                self.add_messages("user", "Tool execution completed", tool_results=tool_result_list)
+            async for event in self.graph.astream({"messages": execution_messages}, config=config, stream_mode="updates"):
                 
-                async for next_event in self.stream_response("Review the execution payload and formulate your descriptive codebase summary response based exactly on these outputs."):
-                    yield next_event
+                if "agent" in event:
+                    msg = event["agent"]["messages"][0]
+                    # self.conversation_history.append(msg)
+
+                    # if len(self.conversation_history) > MAX_HISTORY:
+                    #     self.conversation_history=self.conversation_history[-MAX_HISTORY:]
+                    
+                    if msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            yield {
+                                "type": "tool_call",
+                                "data": {"tool_name": tc["name"], "input": tc["args"],"session_id":self.session_id},
+                                "timestamp": datetime.now().isoformat()
+                            }
                             
-            else:   
-                self.add_messages("assistant", full_response)
-                yield{
-                    "type": "end",
-                    "data": {"answer": full_response},
-                    "timestamp": datetime.now()
-                }
-        except Exception as e:
-            import traceback
-           
-            print("AI HALLUCINATION CAUGHT")
-            
-            
-            if hasattr(e, 'body') and isinstance(e.body, dict):
-                typo = e.body.get('error', {}).get('failed_generation', str(e.body))
-                print(f"WHAT THE AI TYPED:\n{typo}")
+                    elif msg.content and not msg.tool_calls:
 
-                match = re.search(r'<function=([a-zA-Z0-9_]+)[^>\{]*(\{.*\})', typo)
-
-                if match:
-                    t_name = match.group(1)
-                    t_args_str = match.group(2)
-
-                    print(f"🩹 SELF-HEALING: Successfully recovered tool '{t_name}'!")
-                    try:
-                        t_args = json.loads(t_args_str)
+                        final_ans = msg.content
 
                         yield {
-                            "type": "tool_call",
-                            "data": {
-                                "tool_name": t_name,
-                                "input": t_args
-                            },
+                            "type": "text",
+                            "data": {"text": msg.content},
                             "timestamp": datetime.now().isoformat()
                         }
+                        yield {
+                            "type": "end",
+                            "data": {"answer": msg.content},
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        
+                elif "tools" in event:
+                    tool_messages = event["tools"]["messages"]
 
-                        result_data = await self._execute_tool(t_name, t_args)
+
+                    for t_msg in tool_messages:
+                        # self.conversation_history.append(t_msg)
+
+                        # if len(self.conversation_history) > MAX_HISTORY:
+                        #     self.conversation_history=self.conversation_history[-MAX_HISTORY:]
+                        
+                        logger.info(f"[SESSION:{self.session_id}] Tool={t_msg.name} | Output={str(t_msg.content)[:150]}")
 
                         yield {
                             "type": "tool_result",
-                            "data": result_data,
+                            "data": {"tool_name":t_msg.name, "success": True, "output": t_msg.content,"session_id":self.session_id},
                             "timestamp": datetime.now().isoformat()
                         }
-
-                        self.add_messages(
-                            "assistant",
-                            "Executed recovered tool.",
-                            tool_calls=[{"function": {"name": t_name, "arguments": t_args}}]
-                        )
-
-                        self.add_messages(
-                            "user",
-                            "Tool execution completed",
-                            tool_results=[ToolResult(tool_name=t_name, success=result_data.get("success", False), output=result_data)]
-                        )
-
-                        async for next_event in self.stream_response("Review the execution payload and formulate your final descriptive response."):
-                            yield next_event
-
-                        return
-                    
-                    except Exception as e:
-                        print(f" Failed to auto-heal JSON:")
-
-                    
-
-            else:
-                print(f"RAW ERROR:\n{traceback.format_exc()}")
-                
-            
-            yield {
-                "type": "error",
-                "data": {"error": "The AI generated malformed tool JSON. Check the terminal!"},
-                "timestamp": datetime.now().isoformat()
-            }
-            return
-            
-                # if t_calls:
-                #     for i, tc in enumerate(t_calls):
-                #         func = tc.get('function', {}) if isinstance(tc, dict) else getattr(tc, 'function', None)
-                #         if func:
-                #             idx = tc.get('index', i) if isinstance(tc, dict) else getattr(tc, 'index', i)
-                #             if idx not in compiled_tool_calls:
-                #                 compiled_tool_calls[idx] = {"name": None, "arguments": ""}
-                            
-                #             n = func.get('name') if isinstance(func, dict) else getattr(func, 'name', None)
-                #             a = func.get('arguments') if isinstance(func, dict) else getattr(func, 'arguments', None)
-                            
-                #             if n:
-                #                 compiled_tool_calls[idx]["name"] = n
-                #             if a:
-                #                 if isinstance(a, str):
-                #                     compiled_tool_calls[idx]["arguments"] += a
-                #                 elif isinstance(a, dict):
-                #                     compiled_tool_calls[idx]["arguments"] = a
-
-            # current_tool_calls = []
-            # for idx, tool_data in compiled_tool_calls.items():
-            #     t_name = tool_data.get("name")
-            #     t_args = tool_data.get("arguments", "")
-                
-            #     if t_name:
-            #         if isinstance(t_args, str) and t_args.strip():
-            #             try:
-            #                 t_args = json.loads(t_args)
-            #             except Exception:
-            #                 t_args = {}
-            #         elif not isinstance(t_args, dict):
-            #             t_args = {}
                         
-            #         current_tool_calls.append({
-            #             "function": {
-            #                 "name": t_name,
-            #                 "arguments": t_args
-            #             }
-            #         })
 
-            #         yield{
-            #             "type": "tool_call",
-            #             "data": {
-            #                 "tool_name": t_name,
-            #                 "input": t_args
-            #             },
-            #             "timestamp": datetime.now()
-            #         }
+                # elif "reasoning" in event:
+                #     messages = event["reasoning"]["messages"]
+
+                #     last_message = messages[-1]
+
+                #     self.conversation_history.append(AIMessage(content=f"Reasoning summary: {last_message.content[:150]}"))
+
+                #     logger.info(f"[SESSION:{self.session_id}] Reasoning={last_message.content[:100]}")
+
+                #     yield {
+                #         "type":"reasoning",
+                #         "data":{
+                #             "analysis": last_message.content[:300],
+                #             "session_id": self.session_id
+                #         },
+                #         "timestamp":datetime.now().isoformat()
+                #     }
+
+                # elif "final" in event:
+                #     msg = event["final"]["messages"][0]
+
+                #     final_answer = msg.content
+
+                #     yield {
+                #         "type":"text",
+                #         "data":{"text":msg.content},
+                #         "timestamp": datetime.now().isoformat()
+                #     }
+            if final_answer:
+                self.conversation_history.append(HumanMessage(content=query))
+                self.conversation_history.append(AIMessage(content=final_answer))            
             
-        #     if current_tool_calls:
-        #         self.add_messages("assistant", full_response, tool_calls=current_tool_calls)
-        #         tool_result_list = []
 
-        #         for tc in current_tool_calls:
-        #             func = tc.get('function', {})
-        #             name = func.get('name')
-        #             args = func.get('arguments', {})
+                if len(self.conversation_history) > MAX_HISTORY:
+                    self.conversation_history=self.conversation_history[-MAX_HISTORY:]
 
-        #             if not name:
-        #                 continue
-
-        #             result_data = await self._execute_tool(name, args)
-
-        #             yield{
-        #                 "type": "tool_result",
-        #                 "data": result_data,
-        #                 "timestamp": datetime.now()
-        #             } 
-
-        #             tool_result_list.append(ToolResult(
-        #                 tool_name=name, 
-        #                 success=result_data.get("success", False),
-        #                 output=result_data
-        #             ))
-
-        #         self.add_messages("user", "Tool execution completed", tool_results=tool_result_list)
                 
-        #         async for next_event in self.stream_response("Review the execution payload and formulate your descriptive codebase summary response based exactly on these outputs."):
-        #             yield next_event
-                            
-        #     else:   
-        #         self.add_messages("assistant", full_response)
-        #         yield{
-        #             "type": "end",
-        #             "data": {"answer": full_response},
-        #             "timestamp": datetime.now()
-        #         }
-        # except Exception as e:
-        #     import traceback
-           
-        #     print("AI HALLUCINATION CAUGHT")
-            
-            
-        #     if hasattr(e, 'body') and isinstance(e.body, dict):
-        #         typo = e.body.get('error', {}).get('failed_generation', str(e.body))
-        #         print(f"WHAT THE AI TYPED:\n{typo}")
-
-        #     else:
-        #         print(f"RAW ERROR:\n{traceback.format_exc()}")
-                
-            
-        #     yield {
-        #         "type": "error",
-        #         "data": {"error": "The AI generated malformed tool JSON. Check the terminal!"},
-        #         "timestamp": datetime.now().isoformat()
-        #     }
-        #     return
-
-    async def _execute_tool(self , tool_name , tool_input):
-        valid , message = validate_tool_list(tool_name , tool_input)
-
-        if not valid:
-            return {"success":False , "error":message }
-        
-        tool_handler = {
-            "search_code":self.tools.search_code,
-            "find_file":self.tools.find_file,
-            "get_file_content":self.tools.get_file_content,
-            "list_directory":self.tools.list_directory,
-            "analyze_function": self.tools.analyze_function,
-            "analyze_class": self.tools.analyze_class,
-            "get_dependencies": self.tools.get_dependencies,
-            "get_git_log": self.tools.get_git_log,
-            "get_git_blame": self.tools.get_git_blame
-        }
-
-        handler = tool_handler.get(tool_name)
-
-        if not handler:
-            return {"success": False , "error": f"Tool {tool_name} not Found"}
-        
-        try:
-            return await handler(**tool_input)
 
         except Exception as e:
-            return {"success":False , "error":str(e)}
-        
-
-
-    def get_serialized_history(self)->List[Dict[str , Any]]:
-        return [
-            {
-                "role":msg.role,
-                "content":msg.content,
-                "timestamp":datetime.now(),
-                "tool_calls":getattr(msg, 'toolcalls', []),
-                "tool_result":[asdict(r) for r in msg.tool_results]  
+            yield {
+                "type": "error",
+                "data": {"error": f"Agent stopped: {str(e)}"},
+                "timestamp": datetime.now().isoformat()
             }
-            for msg in self.conversation_history
-        ]
-                      
 
-    
-
-
-
-
-
-
+    def get_serialized_history(self) -> List[Dict[str, Any]]:
+        serialized = []
+        for msg in self.conversation_history:
+            role = "user" if isinstance(msg, HumanMessage) else "assistant" if isinstance(msg, AIMessage) else "tool"
+            serialized.append({
+                "role": role,
+                "content": str(msg.content),
+                "timestamp": datetime.now().isoformat()
+            })
+        return serialized
 
 
 

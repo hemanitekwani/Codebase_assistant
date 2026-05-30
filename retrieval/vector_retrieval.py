@@ -3,6 +3,9 @@ from ingestion.embedder import Embedder
 from pathlib import Path
 
 import cohere
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 
@@ -39,18 +42,20 @@ class vector_retrieval:
         return reranked
 
 
-    def retrieve(self , query , session_id, top_k = 5 , mode ="semantic"):
+    def retrieve(self , query , session_id,user_id , top_k = 5 , mode ="semantic"):
         query_embedding = self.embedder.get_embeddings(query).tolist() 
         safe_session_id = str(session_id)
 
         if mode == 'graph':
             filter_graph = {
                 "metadata.session_id": {"$eq": safe_session_id},
+                "metadata.user_id": {"$eq": user_id},
                 "metadata.content_type": {"$eq": "graph_relationship"}
             }
 
             filter_code = {
                 "metadata.session_id": {"$eq": safe_session_id},
+                "metadata.user_id": {"$eq": user_id},
                 "metadata.content_type":{"$ne":"graph_relationship"}
             }
 
@@ -63,7 +68,8 @@ class vector_retrieval:
         
 
         else:
-            filter_all = {"metadata.session_id": {"$eq": safe_session_id}}
+            filter_all = {"metadata.session_id": {"$eq": safe_session_id},  "metadata.user_id": {"$eq": user_id
+            }}
             results = self._vector_search(query_embedding, filter_all , 20)
             return self._boost_and_rerank(query , results , top_k)
 

@@ -10,7 +10,12 @@ from pathlib import Path
 
 load_dotenv()
 
-uri = os.getenv("mongo_client")
+mongo_uri = os.getenv("mongo_client")
+
+client = MongoClient(mongo_uri)
+
+db = client["codebase"]
+
 
 class VectorStore:
     def __init__(self):
@@ -23,20 +28,36 @@ class VectorStore:
 
     def connect(self):
         try:
-            self.client = MongoClient(uri , server_api = ServerApi('1'), tlsAllowInvalidCertificates = True)
+            self.client = MongoClient(mongo_uri , server_api = ServerApi('1'), tlsAllowInvalidCertificates = True)
             self.db = self.client['codebase']
             self.collection = self.db['codechunk']
             self.sessions = self.db['sessions']
             self.chat_history = self.db['chat_history']
             self.code_graph = self.db["graph_code"]
             
+            self.collection.create_index([
+                ("metadata.user_id",1),
+                ("metadata.repo_url",1)
+            ])
+
+            self.collection.create_index([
+                ("session_id",1),
+                ("metadata.source",1)])
+
             
         
         except Exception as e:
             print(f"Error connecting to MongoDB: {e}")
 
 
-    def insert_embeddings(self,docs , repo_url,session_id):
+    def insert_embeddings(self,docs , repo_url,session_id,user_id):
+        self.collection.delete_many({
+            "metadata.user_id": user_id,
+            "metadata.repo_url": repo_url
+        })
+
+        documents = []
+
         for doc in docs:
             try:
                 raw_text = doc.page_content if isinstance(doc.page_content, str) else "\n".join(doc.page_content)
@@ -54,7 +75,7 @@ class VectorStore:
                 }
                 embedding = self.embedder.get_embeddings(enriched_text).tolist()
 
-                self.collection.insert_one({
+                documents.append({
                     "ids" : str(uuid.uuid4()),
                     "session_id":str(session_id),
                     "page_content": enriched_text,
@@ -64,13 +85,19 @@ class VectorStore:
                         "source": source,
                         "content_type": "code",
                         "language": language,
-                        "session_id": str(session_id)
+                        "session_id": str(session_id),
+                        "user_id":user_id
                     },
                    
                 })
-            
+
             except Exception as e:
                 print(f"Error inserting document: {e}")
-
+                
+        if documents:
+            self.collection.insert_many(documents)
+        
+            
+           
 
        

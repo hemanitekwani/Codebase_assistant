@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codebase-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env  # This securely injects your MongoDB Atlas URL and Groq Key
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ui/Dockerfile
+    container_name: codebase-frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+    environment:
+      # This tells Streamlit to route all API calls to the internal Docker backend
+      - API_BASE_URL=http://backend:8000
+    restart: unless-stopped

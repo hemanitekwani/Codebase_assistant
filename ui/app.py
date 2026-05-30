@@ -3,8 +3,10 @@ import requests
 import uuid
 import json
 from streamlit_cookies_manager import EncryptedCookieManager
+import os
 
-API_BASE = "http://localhost:8000"
+API_URL = os.getenv("API_BASE_URL","http://localhost:8000")
+
 
 st.set_page_config(
     page_title = "Codebase Assistant",
@@ -236,7 +238,7 @@ if "session_started" not in st.session_state:
 def api_ingest(repo_url, session_id):
     try:
         r = requests.post(
-            f"{API_BASE}/ingest",
+            f"{API_URL}/ingest",
             json = {"repo_url": repo_url, "session_id": session_id},
             headers = {"x-user-id": st.session_state.user_id},
             timeout = 300
@@ -248,7 +250,7 @@ def api_ingest(repo_url, session_id):
 def api_start_session(repo_url):
     try:
         r = requests.post(
-           f"{API_BASE}/session/start",
+           f"{API_URL}/session/start",
            json = {"repo_url": repo_url},
            headers = {"x-user-id": st.session_state.user_id},
            timeout = 30
@@ -427,7 +429,7 @@ if prompt and st.session_state.session_started:
         payload = {"session_id": st.session_state.session_id, "query": prompt, "stream": True}
         headers = {"x-user-id": st.session_state.user_id, "Content-Type": "application/json"}
         
-        with requests.post(f"{API_BASE}/query/stream", headers=headers, json=payload, stream=True) as response:
+        with requests.post(f"{API_URL}/query/stream", headers=headers, json=payload, stream=True) as response:
             if response.status_code != 200:
                 st.error(f"API Error: {response.text}")
             else:
@@ -447,6 +449,36 @@ if prompt and st.session_state.session_started:
                             tool_name = chunk_data.get("tool_name", "unknown")
                             current_steps.append(tool_name)
                             status_placeholder.markdown(f'<span class="status-pill status-active">🔧 Running {tool_name}...</span>', unsafe_allow_html=True)
+
+
+                        elif chunk_type == "tool_result":
+                            tool_name = chunk_data.get("tool_name","Tool")
+
+                            status_placeholder.markdown(
+                                f'''
+                                <div class="assistant-msg"
+                                style="border-left:3px solid #10b981;">
+                                ✅ {tool_name} completed
+                                </div>
+                                ''',
+                                unsafe_allow_html=True
+                            )
+
+
+
+                        elif chunk_type == "reasoning":
+                            reasoning = chunk_data.get("analysis" , {})
+
+                            status_placeholder.markdown(
+                                f'''
+                                <div class="assistant-msg"
+                                style="border-left:3px solid #f59e0b;">
+                                🧠 {reasoning}
+                                </div>
+                                ''',
+                                unsafe_allow_html=True
+                            )
+
                             
                             # Real-time update of the assistant div with the new steps badge!
                             steps_html = format_steps(current_steps)
@@ -481,6 +513,17 @@ if prompt and st.session_state.session_started:
                                 f'{full_answer}<br>{steps_html}</div>',
                                 unsafe_allow_html=True
                             )
+
+                        elif chunk_type == "error":
+                            status_placeholder.empty()
+                            error_msg = chunk_data.get("error", "Unknown backend error")
+                            msg_placeholder.markdown(
+                                f'<div class="assistant-msg" style="border-left: 3px solid #f87171;">'
+                                f'<span style="color:#f87171; font-weight:600;">❌ Agent Error</span><br><br>'
+                                f'{error_msg}</div>', 
+                                unsafe_allow_html=True
+                            )
+                            break
                             
                     except json.JSONDecodeError:
                         pass
@@ -496,7 +539,4 @@ if prompt and st.session_state.session_started:
         st.error(f"Connection failed: {e}")
 
 elif prompt and not st.session_state.session_started:
-    st.warning("Please click 'Start' in the sidebar to begin a session first!")
-
-
-
+    st.warning("Please click 'Start' in the sidebar to begin a session first!") 

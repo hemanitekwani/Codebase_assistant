@@ -1,9 +1,26 @@
 import rustworkx as rx
 from datetime import datetime
+from pymongo import MongoClient
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+client = MongoClient(os.getenv("mongo_client"))
+
+db = client["codebase"]
+
+gb = db["graph_code"]
+
+gb.create_index([
+    ("session_id",1)
+])
 
 class GraphStore:
-    def __init__(self, db):
-        self.gb = db["graph_code"]
+    def __init__(self, db,session_id):
+        self.gb=db["graph_code"]
+        self.session_id=session_id
 
     
     def save(self , graph , repo_url):
@@ -35,10 +52,11 @@ class GraphStore:
 
             
         self.gb.update_one(
-            {"repo_url": repo_url},
+            {"session_id": str(self.session_id)},
             {
                 "$set": {
                     "repo_url": repo_url,
+                    "session_id":self.session_id,
                     "nodes": nodes,
                     "edges": edges,
                     "node_count": len(nodes),
@@ -53,7 +71,7 @@ class GraphStore:
 
     
     def load(self , repo_url)-> tuple[rx.PyDiGraph , dict]:
-        doc = self.gb.find_one({"repo_url": repo_url})
+        doc = self.gb.find_one({"session_id": self.session_id})
 
         if not doc:
             print(f"No graph found for {repo_url}")
@@ -98,7 +116,7 @@ class GraphStore:
 
     def exists(self , repo_url:str):
         return self.gb.find_one(
-            {"repo_url" : repo_url},
+            {"session_id" : self.session_id},
             {"_id": 1}
         ) is not None
         

@@ -5,6 +5,9 @@ import shutil
 import uuid
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from datetime import datetime
+
+
 
 load_dotenv()
 
@@ -16,11 +19,18 @@ db = client["codebase"]
 
 raw_files_collection = db["raw_repo_files"]
 
+raw_files_collection.create_index([("session_id", 1)])
+
+raw_files_collection.create_index([("user_id",1) , ("repo_url",1)])
+
+raw_files_collection.create_index([("session_id",1),("file_path", 1)])
+
 
 class GitLoader:
-    def __init__(self, repo_url:str,session_id:str):
+    def __init__(self, repo_url:str,session_id:str,user_id:str):
         self.repo_url = repo_url
         self.session_id = session_id
+        self.user_id = user_id
         self.token = os.getenv("pat_token")
 
 
@@ -69,13 +79,18 @@ class GitLoader:
 
                             raw_docs_for_mongo.append({
                                 "session_id":self.session_id,
+                                "user_id":self.user_id,
+                                "repo_url":self.repo_url,
+
                                 "file_path":relative_path,
-                                "content":content
+                                "content":content,
+
+                                "created_at":datetime.now()
                             })
 
                             documents_for_splitter.append({
                                 "page_content":content,
-                                "metadata":{"source":relative_path , "session_id":self.session_id}
+                                "metadata":{"source":relative_path , "session_id":self.session_id,"user_id":self.user_id,"repo_url":self.repo_url}
                             })
 
                         except Exception as e:
@@ -83,9 +98,10 @@ class GitLoader:
 
 
                 if raw_docs_for_mongo:
-                    raw_files_collection.delete_many({"session_id":self.session_id})
+                    raw_files_collection.delete_many({"session_id":self.session_id , "user_id":self.user_id})
 
                     raw_files_collection.insert_many(raw_docs_for_mongo)
+
                     print(f"[LOADER] Saved {len(raw_docs_for_mongo)} full files to 'raw_repo_files' collection!")
         
         finally:

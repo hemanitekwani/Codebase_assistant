@@ -5,8 +5,7 @@ import uvicorn
 
 from fastapi.responses import StreamingResponse
 
-from typing import Optional,AsyncGenerator,Optional,Dict,Any
-import asyncio
+from typing import Optional,AsyncGenerator,Dict,Any
 import json
 import logging
 from datetime import datetime
@@ -15,7 +14,6 @@ from config_settings import get_settings
 from pydantic import BaseModel
 from agent.agent import CodebaseAgent
 
-from tools.definitions import validate_tool_list
 
 from fastapi.responses import JSONResponse
 
@@ -28,6 +26,7 @@ from ingestion.vector_store import VectorStore
 from graph.builder import GraphBuilder
 from graph.store import GraphStore
 from graph.indexer import GraphIndexer
+from datetime import datetime
 
 
 app = FastAPI(
@@ -38,6 +37,11 @@ app = FastAPI(
 )
 
 logger = logging.getLogger(__name__)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 
 settings =  get_settings()
@@ -52,14 +56,15 @@ session_manager = SessionManager(vector_store.db)
 active_agents: Dict[str,CodebaseAgent] = {}
 
 
-def get_or_create_agent(session_id:str)->CodebaseAgent:
+def get_or_create_agent(session_id:str,x_user_id:str)->CodebaseAgent:
     if session_id not in active_agents:
         active_agents[session_id] = CodebaseAgent(
             session_id = session_id,
+            user_id = x_user_id,
             # model="llama-3.1-8b-instant",
             model="llama-3.3-70b-versatile",
             vector_db=vector_store.collection,
-            max_iterations=4
+           
         )
     
     return active_agents[session_id]
@@ -95,17 +100,38 @@ class StreamMessage(BaseModel):
 
 @app.get("/")
 async def root():
-    """Default landing route"""
+    """Landing page"""
     return {
-        "message": "Codebase Assistant API is running!",
-        "documentation": "Visit /docs for the interactive API testing interface."
+        "message": "Codebase Assistant API v3.0.0",
+        "status": "running",
+        "documentation": "/docs",
+        "endpoints": {
+            "session": {
+                "start": "POST /session/start",
+                "get": "GET /session/{session_id}",
+                "end": "DELETE /session/{session_id}"
+            },
+            "query": {
+                "standard": "POST /query",
+                "stream": "POST /query/stream"
+            },
+            "ingestion": "POST /ingest"
+        }
     }
 
 
-
 @app.post("/ingest")
-async def ingest(request: IngestRequest):
-    loader = GitLoader(repo_url = request.repo_url , session_id=request.session_id)
+async def ingest(request: IngestRequest,x_user_id:str = Header(...)):
+    session = session_manager.validate_session(request.session_id , x_user_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid Session"
+        )
+    
+
+    loader = GitLoader(repo_url = request.repo_url , session_id=request.session_id, user_id = x_user_id)
     raw_documents = loader.load_to_mongo()
 
     if not raw_documents:
@@ -118,17 +144,15 @@ async def ingest(request: IngestRequest):
 
     print("Embedding and storing chunks...")
 
-    vector_store = VectorStore()
-    vector_store.connect()
-
     vector_store.insert_embeddings(
         docs=vector_chunks,
         repo_url=request.repo_url,
-        session_id=request.session_id
+        session_id=request.session_id,
+        user_id=x_user_id
     )
     print(" Ingestion Complete!")
     
-    graph_store = GraphStore(vector_store.db)
+    graph_store = GraphStore(vector_store.db,session_id=request.session_id)
 
     if graph_store.exists(request.repo_url):
         print('Graph Exists, loading from DB...')
@@ -142,7 +166,7 @@ async def ingest(request: IngestRequest):
         print(f" Graph built and saved")
     
     existing_graph_indices = vector_store.collection.count_documents(
-        {"metadata.repo_url": request.repo_url, "metadata.content_type": "graph_relationship"}
+        {"metadata.session_id": request.session_id, "metadata.content_type": "graph_relationship"}
     )
 
     if existing_graph_indices == 0: 
@@ -173,9 +197,15 @@ async def create_session(request:Startrequest, x_user_id:str = Header(...)):
 
 
 @app.get("/conversation/{session_id}")
-async def get_conversation(session_id:str , user_id:str = Header(...)):
-    if not session_manager.validate_session(session_id):
+async def get_conversation(session_id:str , x_user_id:str = Header(...)):
+    session = session_manager.validate_session(
+        session_id,
+        x_user_id
+    )
+
+    if not session:
         raise HTTPException(status_code=403,detail="Invalid Session")
+    
     
     history = session_manager.get_recent_context(session_id, last_n=50)
 
@@ -189,11 +219,19 @@ async def get_conversation(session_id:str , user_id:str = Header(...)):
 
 @app.delete("/session/{session_id}")
 async def end_session(session_id:str , x_user_id: str = Header(...)):
-    if not session_manager.validate(session_id):
-        raise HTTPException(status_code = 403 , detail = "Invalid Session")
+    
+    session = session_manager.validate_session(session_id , x_user_id)
+
+    if not session:
+        raise HTTPException(status_code=403,
+        detail="Invalid Session")
     
 
     session_manager.end_session(session_id)
+
+    if session_id in active_agents:
+        del active_agents[session_id]
+
     return {"status": "ended"}
 
 
@@ -202,13 +240,11 @@ async def process_query(request:Queryrequest , x_user_id:str = Header(...)):
     if not request.query.strip():
         raise HTTPException(status_code=400 , detail="Query cannot be empty")
     
-    if not session_manager.validate_session(request.session_id):
-        raise HTTPException(status_code=403,details="Invalid session")
+    if not session_manager.validate_session(request.session_id,x_user_id):
+        raise HTTPException(status_code=403,detail="Invalid session")
     
 
-    session = session_manager.fetch_session(request.session_id)
-
-    agent = get_or_create_agent(request.session_id)
+    agent = get_or_create_agent(request.session_id,x_user_id)
 
     try:
         events = []
@@ -220,7 +256,11 @@ async def process_query(request:Queryrequest , x_user_id:str = Header(...)):
         final_answer = final_event.get("data",{}).get("answer","")
 
         if final_answer:
-            session_manager.save_messages(request.session_id, request.query , final_answer)
+            session_manager.save_messages(request.session_id,"user",request.query,request.query)
+
+
+            session_manager.save_messages(request.session_id, "assistant", request.query, final_answer)
+
 
         return {
             "status":"success",
@@ -233,7 +273,7 @@ async def process_query(request:Queryrequest , x_user_id:str = Header(...)):
         }
 
     except Exception as e:
-        logger.error(f"Error Processing qery:{str(e)}")
+        logger.error(f"Error Processing query:{str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
 
@@ -242,11 +282,10 @@ async def stream_query(request: Queryrequest, x_user_id: str = Header(...)):
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
-    if not session_manager.validate_session(request.session_id):
+    if not session_manager.validate_session(request.session_id,x_user_id):
         raise HTTPException(status_code=403, detail="Invalid session")
     
-    session = session_manager.fetch_session(request.session_id)
-    agent = get_or_create_agent(request.session_id)
+    agent = get_or_create_agent(request.session_id , x_user_id)
 
     async def event_generator() -> AsyncGenerator[str, None]:
         final_answer = ""
@@ -271,7 +310,10 @@ async def stream_query(request: Queryrequest, x_user_id: str = Header(...)):
                     final_answer = event.get("data", {}).get("answer", "")
 
             if final_answer:
-                session_manager.save_messages(request.session_id, request.query, final_answer)
+                session_manager.save_messages(request.session_id,"user",request.query,request.query)
+
+
+                session_manager.save_messages(request.session_id, "assistant", request.query, final_answer)
 
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}")
@@ -283,35 +325,6 @@ async def stream_query(request: Queryrequest, x_user_id: str = Header(...)):
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
-@app.post('/tools/{tool_name}')
-async def execute_tool(tool_name:str, request:ToolRequest ,x_user_id:str=Header(...)):
-    if not session_manager.validate_session(request.session_id):
-        raise HTTPException(status_code=403,detail="Invalid Session")
-    
-    try:
-        session = session_manager.fetch_session(request.session_id)
-        agent = get_or_create_agent(request.session_id)
-
-        
-        valid,message = validate_tool_list(tool_name,request.inputs)
-
-        if not valid:
-            raise HTTPException(status_code=400,detail=message)
-
-           
-        result= await agent._execute_tool(tool_name, request.inputs)
-
-        return{
-            "status":"success",
-            "tool":tool_name,
-            "response":result,
-            "timestamp":datetime.now()
-            }
-    
-    except Exception as e:
-        logger.error(f"Tool execution error:{str(e)}")
-
-        raise HTTPException(status_code=500, detail=str(e))
     
 
 @app.exception_handler(Exception)
@@ -347,6 +360,7 @@ if __name__=="__main__":
         workers=1,
         log_level=settings.log_level.lower()
     )
+
 
 
 
