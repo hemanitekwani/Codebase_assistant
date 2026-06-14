@@ -220,8 +220,8 @@ if "user_id" not in cookies:
 
 st.session_state.user_id = cookies["user_id"]
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = None
+
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -271,6 +271,21 @@ def format_steps(steps):
     
     return f'<div class="steps-container">{badges}</div>'
 
+def api_get_sessions():
+    r = requests.get(f"{API_URL}/sessions",
+                    headers={"x-user-id":st.session_state.user_id} 
+                    
+        )
+    
+    return r.json()
+
+def api_get_history(session_id):
+    r = requests.get(f"{API_URL}/conversation/{session_id}",
+                    headers={"x-user-id":st.session_state.user_id}
+    ) 
+
+    return r.json()
+
 # --- SIDEBAR ---
 with st.sidebar:
     st.markdown('<p class="main-title">⌗ Codebase</p>', unsafe_allow_html=True)
@@ -298,7 +313,33 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown('<p class="section-label">Repository</p>', unsafe_allow_html=True)
- 
+
+    if st.button("➕ New Chat", use_container_width=True):
+        st.session_state.session_started = False
+        st.session_state.repo_url = ""
+        st.session_state.messages = []
+        st.session_state.ingested = False
+
+        st.rerun()
+
+     
+    st.markdown("### Chats")
+
+    sessions = api_get_sessions()
+
+    for s in sessions:
+        print(f"s: {s}")
+        repo = s["repo_url"].split("/")[-1]
+
+        if st.button( f"📂 {repo}",key=s["session_id"],use_container_width=True):
+          st.session_state.session_id = s["session_id"]
+          st.session_state.session_started = True
+          st.session_state.repo_url = s["repo_url"]
+
+          st.session_state.messages = api_get_history(s["session_id"])
+          st.rerun()
+
+
     repo_url = st.text_input(
         "GitHub URL",
         placeholder="https://github.com/owner/repo",

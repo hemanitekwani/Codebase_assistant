@@ -23,6 +23,7 @@ class CodebaseAgent:
         self.model = model
         self.vector_db = vector_db
         self.user_id = user_id
+        self.conversation=self.vector_db['chat_history']
 
         self.max_iterations=max_iterations
         
@@ -62,6 +63,24 @@ class CodebaseAgent:
                """
         
 
+    def load_history_from_db(self,limit=10):
+        docs = list(
+            self.conversation.find({"session_id":self.session_id}).sort("timestamp",-1).limit(limit * 2)
+        )
+
+        docs.reverse()
+
+        messages = []
+
+        for doc in docs:
+            if doc["role"] == "user":
+                messages.append(HumanMessage(content=doc["query"]))
+            
+            elif doc["role"] == "assistant":
+                messages.append(AIMessage(content=doc["content"]))
+
+
+        return messages
     # async def reasoning_node(self,state):
     #     messages=state["messages"]
 
@@ -156,7 +175,7 @@ class CodebaseAgent:
         }
         logger.info( f"[SESSION:{self.session_id}] Query={query}")
 
-        execution_messages = self.conversation_history.copy()
+        execution_messages = self.load_history_from_db(limit=10)
 
         execution_messages.append(HumanMessage(content=query))
 
@@ -184,7 +203,7 @@ class CodebaseAgent:
                             
                     elif msg.content and not msg.tool_calls:
 
-                        final_ans = msg.content
+                        final_answer = msg.content
 
                         yield {
                             "type": "text",
@@ -202,11 +221,7 @@ class CodebaseAgent:
 
 
                     for t_msg in tool_messages:
-                        # self.conversation_history.append(t_msg)
 
-                        # if len(self.conversation_history) > MAX_HISTORY:
-                        #     self.conversation_history=self.conversation_history[-MAX_HISTORY:]
-                        
                         logger.info(f"[SESSION:{self.session_id}] Tool={t_msg.name} | Output={str(t_msg.content)[:150]}")
 
                         yield {
@@ -245,9 +260,23 @@ class CodebaseAgent:
                 #         "timestamp": datetime.now().isoformat()
                 #     }
             if final_answer:
-                self.conversation_history.append(HumanMessage(content=query))
-                self.conversation_history.append(AIMessage(content=final_answer))            
-            
+                self.conversation.insert_one({
+                    "session_id": self.session_id,
+                    "user_id": self.user_id,
+                    "role": "user",
+                    "query": query,
+                    "content": query,
+                    "timestamp": datetime.utcnow()
+                })
+                self.conversation.insert_one(
+                    {
+                        "session_id":self.session_id,
+                        "user_id":self.user_id,
+                        "role":"assistant",
+                        "query":query,
+                        "content":final_answer,
+                        "timestamp":datetime.now()                    }
+                )
 
                 if len(self.conversation_history) > MAX_HISTORY:
                     self.conversation_history=self.conversation_history[-MAX_HISTORY:]

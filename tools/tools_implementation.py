@@ -14,6 +14,8 @@ import re
 import httpx
 import tempfile
 from functools import lru_cache
+from typing import Union
+
 
 from retrieval.vector_retrieval import vector_retrieval
 from retrieval.direct_retrieval import FileMatch
@@ -100,7 +102,7 @@ def get_agent_tools(session_id: str, user_id:str, collection=None) -> list:
    
 
     @tool
-    async def search_code(query: str, language: Optional[str] = None, top_k: int = 5, search_type: str = 'semantic') -> Any:
+    async def search_code(query: str, language: Optional[str] = None, top_k: Union[int,str] = 5, search_type: str = 'semantic') -> Any:
         """Search for code snippets using semantic/keyword search.""" 
         try:
             if search_type == 'semantic' and collection is not None:

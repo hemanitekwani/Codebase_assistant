@@ -146,6 +146,7 @@ class SessionManager:
         )
             
     
+    
  
     def end_session(self , session_id):
         self.sessions.update_one({"session_id": session_id} , {"$set": {"status": SessionStatus.ENDED , "ended_at":datetime.now()}})

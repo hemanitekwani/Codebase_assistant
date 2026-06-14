@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     container_name: codebase-backend
     ports:
       - "8000:8000"

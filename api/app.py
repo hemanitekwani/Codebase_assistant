@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 
 from session.session_manager import SessionManager
+from session.session_manager import SessionStatus
 from ingestion.loader import GitLoader
 from ingestion.splitter import Splitter
 from ingestion.vector_store import VectorStore
@@ -51,6 +52,7 @@ vector_store = VectorStore()
 vector_store.connect()
 
 session_manager = SessionManager(vector_store.db)
+sessions = vector_store.db['sessions']
 
 
 active_agents: Dict[str,CodebaseAgent] = {}
@@ -325,7 +327,19 @@ async def stream_query(request: Queryrequest, x_user_id: str = Header(...)):
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
-    
+@app.get("/sessions")
+def get_user_session(x_user_id:str = Header(...)):
+    return list(sessions.find(
+        {"user_id":x_user_id,
+        "status": SessionStatus.ACTIVE},
+
+        {"_id":0,
+        "session_id":1,
+        "repo_url":1,
+        "last_activity":1}
+            
+    ).sort("last_activity" ,-1)
+    )  
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request,exc):
